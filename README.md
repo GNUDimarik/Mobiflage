@@ -1,3 +1,14 @@
+NOTICE:
+
+PDE ( Plausible Deniable Encryption) for android. Created by Adam Skillen &amp; Mohammad Mannan
+
+Original paper: http://spectrum.library.concordia.ca/975074
+
+Website: http://users.encs.concordia.ca/~a_skil/mobiflage/
+
+License: https://github.com/x942/mobiflage/blob/master/NOTICE
+
+
 Mobiflage
 Android source code patches
 -=-=-=-=-=-=-=-=-=-=-=-=-=-
