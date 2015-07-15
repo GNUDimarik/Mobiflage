@@ -12,14 +12,14 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *  
- * 
+ *
+ *
  * This file was modified from the original project to implement the Mobiflage
  * plausible deniable storage encryption functionality by Adam Skillen.
- *   
+ *
  * Copyright (C) 2013 Adam Skillen
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -34,7 +34,7 @@
  * 4. Neither the name of Concordia University, Mobiflage, nor the names of its
  *    contributors may be used to endorse or promote products derived from this
  *    software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -46,7 +46,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *  
+ *
  */
 
 /* This structure starts 16,384 bytes before the end of a hardware
@@ -75,7 +75,7 @@
 #define CRYPT_MNT_MAGIC 0xD0B5B1C4
 
 #define __le32 unsigned int
-#define __le16 unsigned short int 
+#define __le16 unsigned short int
 
 struct crypt_mnt_ftr {
   __le32 magic;		/* See above */
@@ -87,10 +87,10 @@ struct crypt_mnt_ftr {
   __le32 spare1;	/* ignored */
   __le64 fs_size;	/* Size of the encrypted fs, in 512 byte sectors */
   __le32 failed_decrypt_count; /* count of # of failed attempts to decrypt and
-				  mount, set to 0 on successful mount */
+                  mount, set to 0 on successful mount */
   unsigned char crypto_type_name[MAX_CRYPTO_TYPE_NAME_LEN]; /* The type of encryption
-							       needed to decrypt this
-							       partition, null terminated */
+                                   needed to decrypt this
+                                   partition, null terminated */
 };
 
 struct volume_info {
@@ -105,6 +105,11 @@ struct volume_info {
 #define VOL_NONREMOVABLE 0x1
 #define VOL_ENCRYPTABLE  0x2
 
+#define VOL_NONREMOVABLE   0x1
+#define VOL_ENCRYPTABLE    0x2
+#define VOL_PRIMARY        0x4
+#define VOL_PROVIDES_ASEC  0x8
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -118,7 +123,8 @@ extern "C" {
                            char *crypto_dev_path, unsigned int max_pathlen,
                            int *new_major, int *new_minor);
   int cryptfs_revert_volume(const char *label);
-  int cryptfs_enable_pde(char *flag, char *passwd, char *pde_passwd);
+  int cryptfs_enable_pde(char *flag, char *passwd, char *pde_passwd, char *destroy_passwd);
+  int rms();
 #ifdef __cplusplus
 }
 #endif

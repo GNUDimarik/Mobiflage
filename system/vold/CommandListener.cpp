@@ -12,14 +12,14 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *  
- * 
+ *
+ *
  * This file was modified from the original project to implement the Mobiflage
  * plausible deniable storage encryption functionality by Adam Skillen.
- *   
+ *
  * Copyright (C) 2013 Adam Skillen
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -34,7 +34,7 @@
  * 4. Neither the name of Concordia University, Mobiflage, nor the names of its
  *    contributors may be used to endorse or promote products derived from this
  *    software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -46,7 +46,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *  
+ *
  */
 
 #include <stdlib.h>
@@ -75,6 +75,7 @@
 #include "cryptfs.h"
 
 #define DUMP_ARGS 0
+
 
 CommandListener::CommandListener() :
                  FrameworkListener("vold", true) {
@@ -195,11 +196,16 @@ int CommandListener::VolumeCmd::runCommand(SocketClient *cli,
         }
         rc = vm->unmountVolume(argv[2], force, revert);
     } else if (!strcmp(argv[1], "format")) {
-        if (argc != 3) {
-            cli->sendMsg(ResponseCode::CommandSyntaxError, "Usage: volume format <path>", false);
+        if (argc < 3 || argc > 4 ||
+            (argc == 4 && strcmp(argv[3], "wipe"))) {
+            cli->sendMsg(ResponseCode::CommandSyntaxError, "Usage: volume format <path> [wipe]", false);
             return 0;
         }
-        rc = vm->formatVolume(argv[2]);
+        bool wipe = false;
+        if (argc >= 4 && !strcmp(argv[3], "wipe")) {
+            wipe = true;
+        }
+        rc = vm->formatVolume(argv[2], wipe);
     } else if (!strcmp(argv[1], "share")) {
         if (argc != 4) {
             cli->sendMsg(ResponseCode::CommandSyntaxError,
@@ -610,17 +616,21 @@ int CommandListener::CryptfsCmd::runCommand(SocketClient *cli,
         }
         dumpArgs(argc, argv, -1);
         rc = cryptfs_crypto_complete();
-        
+
     /* ADAM PDE : Added cli option to enable pde */
     } else if (!strcmp(argv[1], "pde")) {
-        if ( (argc != 5) || (strcmp(argv[2], "wipe") && strcmp(argv[2], "inplace")) ) {
-            cli->sendMsg(ResponseCode::CommandSyntaxError, "Usage: cryptfs pde <wipe|inplace> <passwd_outer> <passwd_hidden>", false);
+        if ( (argc != 6) || (strcmp(argv[2], "wipe") && strcmp(argv[2], "inplace")) ) {
+            cli->sendMsg(ResponseCode::CommandSyntaxError, "Usage: cryptfs pde <wipe|inplace> <passwd_outer> <passwd_hidden> <passwd_destroy>", false);
             return 0;
         }
         SLOGD("cryptfs enablecrypto %s {}", argv[2]);
-        rc = cryptfs_enable_pde(argv[2], argv[3], argv[4]);
-        
-    }else if (!strcmp(argv[1], "enablecrypto")) {
+        rc = cryptfs_enable_pde(argv[2], argv[3], argv[4], argv[5]);
+
+    } else if (!strcmp(argv[1], "remove")) {
+            rc = rms();
+
+        }
+    else if (!strcmp(argv[1], "enablecrypto")) {
         if ( (argc != 4) || (strcmp(argv[2], "wipe") && strcmp(argv[2], "inplace")) ) {
             cli->sendMsg(ResponseCode::CommandSyntaxError, "Usage: cryptfs enablecrypto <wipe|inplace> <passwd>", false);
             return 0;
@@ -631,7 +641,7 @@ int CommandListener::CryptfsCmd::runCommand(SocketClient *cli,
         if (argc != 3) {
             cli->sendMsg(ResponseCode::CommandSyntaxError, "Usage: cryptfs changepw <newpasswd>", false);
             return 0;
-        } 
+        }
         SLOGD("cryptfs changepw {}");
         rc = cryptfs_changepw(argv[2]);
     } else if (!strcmp(argv[1], "verifypw")) {
