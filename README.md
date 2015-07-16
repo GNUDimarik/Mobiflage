@@ -1,3 +1,7 @@
+New features:
+Ported to android kitkat
+Add new feature with third password. When used enter third password hidden volume wipes and system starts with empty hidden volume
+
 NOTICE:
 
 PDE ( Plausible Deniable Encryption) for android. Created by Adam Skillen &amp; Mohammad Mannan
@@ -37,7 +41,3 @@ Android source code patches
  For additional information, and contirbutor contact information please see the 
  project website:
  http://users.encs.concordia.ca/~a_skil/mobiflage/
-
-New features:
-Ported to android kitkat
-Add new feature with third password. When used enter third password hidden volume wipes and system starts with empty hidden volume
