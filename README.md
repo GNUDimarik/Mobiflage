@@ -1,5 +1,5 @@
 New features:
-Implemented to android 10
+Implemented for android 10
 
 NOTICE:
 
