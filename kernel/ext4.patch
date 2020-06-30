@@ -1,0 +1,535 @@
+diff --git a/arch/arm64/configs/bonito_defconfig b/arch/arm64/configs/bonito_defconfig
+index e957edb6bacb..c80fac57a2f9 100644
+--- a/arch/arm64/configs/bonito_defconfig
++++ b/arch/arm64/configs/bonito_defconfig
+@@ -668,5 +668,8 @@ CONFIG_CRYPTO_AES_ARM64_CE_CCM=y
+ CONFIG_CRYPTO_AES_ARM64_CE_BLK=y
+ CONFIG_CRYPTO_AES_ARM64_NEON_BLK=y
+ CONFIG_CRYPTO_CRC32_ARM64=y
++CONFIG_CRYPTO_XTS=y
++CONFIG_CRYPTO_ECB=y
++CONFIG_EXT4_DEBUG=y
+ CONFIG_XZ_DEC=y
+ CONFIG_QMI_ENCDEC=y
+diff --git a/fs/ext4/ialloc.c b/fs/ext4/ialloc.c
+index e37e5f1435b9..86c36b7f4432 100644
+--- a/fs/ext4/ialloc.c
++++ b/fs/ext4/ialloc.c
+@@ -361,305 +361,48 @@ void ext4_free_inode(handle_t *handle, struct inode *inode)
+ 	ext4_std_error(sb, fatal);
+ }
+ 
+-struct orlov_stats {
+-	__u64 free_clusters;
+-	__u32 free_inodes;
+-	__u32 used_dirs;
+-};
+-
+-/*
+- * Helper function for Orlov's allocator; returns critical information
+- * for a particular block group or flex_bg.  If flex_size is 1, then g
+- * is a block group number; otherwise it is flex_bg number.
+- */
+-static void get_orlov_stats(struct super_block *sb, ext4_group_t g,
+-			    int flex_size, struct orlov_stats *stats)
+-{
+-	struct ext4_group_desc *desc;
+-	struct flex_groups *flex_group = EXT4_SB(sb)->s_flex_groups;
+-
+-	if (flex_size > 1) {
+-		stats->free_inodes = atomic_read(&flex_group[g].free_inodes);
+-		stats->free_clusters = atomic64_read(&flex_group[g].free_clusters);
+-		stats->used_dirs = atomic_read(&flex_group[g].used_dirs);
+-		return;
+-	}
+-
+-	desc = ext4_get_group_desc(sb, g, NULL);
+-	if (desc) {
+-		stats->free_inodes = ext4_free_inodes_count(sb, desc);
+-		stats->free_clusters = ext4_free_group_clusters(sb, desc);
+-		stats->used_dirs = ext4_used_dirs_count(sb, desc);
+-	} else {
+-		stats->free_inodes = 0;
+-		stats->free_clusters = 0;
+-		stats->used_dirs = 0;
+-	}
+-}
+-
+-/*
+- * Orlov's allocator for directories.
+- *
+- * We always try to spread first-level directories.
+- *
+- * If there are blockgroups with both free inodes and free blocks counts
+- * not worse than average we return one with smallest directory count.
+- * Otherwise we simply return a random group.
+- *
+- * For the rest rules look so:
+- *
+- * It's OK to put directory into a group unless
+- * it has too many directories already (max_dirs) or
+- * it has too few free inodes left (min_inodes) or
+- * it has too few free blocks left (min_blocks) or
+- * Parent's group is preferred, if it doesn't satisfy these
+- * conditions we search cyclically through the rest. If none
+- * of the groups look good we just look for a group with more
+- * free inodes than average (starting at parent's group).
+- */
+-
+-static int find_group_orlov(struct super_block *sb, struct inode *parent,
+-			    ext4_group_t *group, umode_t mode,
+-			    const struct qstr *qstr)
++/* ADAM PDE: linear alloc for directories */
++static int find_group_dir_linear(struct super_block *sb, struct inode *parent,
++				 ext4_group_t *best_group)
+ {
+-	ext4_group_t parent_group = EXT4_I(parent)->i_block_group;
+-	struct ext4_sb_info *sbi = EXT4_SB(sb);
+-	ext4_group_t real_ngroups = ext4_get_groups_count(sb);
+-	int inodes_per_group = EXT4_INODES_PER_GROUP(sb);
+-	unsigned int freei, avefreei, grp_free;
+-	ext4_fsblk_t freeb, avefreec;
+-	unsigned int ndirs;
+-	int max_dirs, min_inodes;
+-	ext4_grpblk_t min_clusters;
+-	ext4_group_t i, grp, g, ngroups;
+-	struct ext4_group_desc *desc;
+-	struct orlov_stats stats;
+-	int flex_size = ext4_flex_bg_size(sbi);
+-	struct dx_hash_info hinfo;
+-
+-	ngroups = real_ngroups;
+-	if (flex_size > 1) {
+-		ngroups = (real_ngroups + flex_size - 1) >>
+-			sbi->s_log_groups_per_flex;
+-		parent_group >>= sbi->s_log_groups_per_flex;
+-	}
+-
+-	freei = percpu_counter_read_positive(&sbi->s_freeinodes_counter);
+-	avefreei = freei / ngroups;
+-	freeb = EXT4_C2B(sbi,
+-		percpu_counter_read_positive(&sbi->s_freeclusters_counter));
+-	avefreec = freeb;
+-	do_div(avefreec, ngroups);
+-	ndirs = percpu_counter_read_positive(&sbi->s_dirs_counter);
+-
+-	if (S_ISDIR(mode) &&
+-	    ((parent == d_inode(sb->s_root)) ||
+-	     (ext4_test_inode_flag(parent, EXT4_INODE_TOPDIR)))) {
+-		int best_ndir = inodes_per_group;
+-		int ret = -1;
+-
+-		if (qstr) {
+-			hinfo.hash_version = DX_HASH_HALF_MD4;
+-			hinfo.seed = sbi->s_hash_seed;
+-			ext4fs_dirhash(qstr->name, qstr->len, &hinfo);
+-			grp = hinfo.hash;
+-		} else
+-			grp = prandom_u32();
+-		parent_group = (unsigned)grp % ngroups;
+-		for (i = 0; i < ngroups; i++) {
+-			g = (parent_group + i) % ngroups;
+-			get_orlov_stats(sb, g, flex_size, &stats);
+-			if (!stats.free_inodes)
+-				continue;
+-			if (stats.used_dirs >= best_ndir)
+-				continue;
+-			if (stats.free_inodes < avefreei)
+-				continue;
+-			if (stats.free_clusters < avefreec)
+-				continue;
+-			grp = g;
++	ext4_group_t ngroups = ext4_get_groups_count(sb);
++	struct ext4_group_desc *desc = NULL;
++	ext4_group_t group;
++	int ret = -1;
++
++	for (group = 0; group < ngroups; group++) {
++		desc = ext4_get_group_desc(sb, group, NULL);
++		if (desc && ext4_free_inodes_count(sb, desc)) {
++			*best_group = group;
+ 			ret = 0;
+-			best_ndir = stats.used_dirs;
+-		}
+-		if (ret)
+-			goto fallback;
+-	found_flex_bg:
+-		if (flex_size == 1) {
+-			*group = grp;
+-			return 0;
+-		}
+-
+-		/*
+-		 * We pack inodes at the beginning of the flexgroup's
+-		 * inode tables.  Block allocation decisions will do
+-		 * something similar, although regular files will
+-		 * start at 2nd block group of the flexgroup.  See
+-		 * ext4_ext_find_goal() and ext4_find_near().
+-		 */
+-		grp *= flex_size;
+-		for (i = 0; i < flex_size; i++) {
+-			if (grp+i >= real_ngroups)
+-				break;
+-			desc = ext4_get_group_desc(sb, grp+i, NULL);
+-			if (desc && ext4_free_inodes_count(sb, desc)) {
+-				*group = grp+i;
+-				return 0;
+-			}
+-		}
+-		goto fallback;
+-	}
+-
+-	max_dirs = ndirs / ngroups + inodes_per_group / 16;
+-	min_inodes = avefreei - inodes_per_group*flex_size / 4;
+-	if (min_inodes < 1)
+-		min_inodes = 1;
+-	min_clusters = avefreec - EXT4_CLUSTERS_PER_GROUP(sb)*flex_size / 4;
+-
+-	/*
+-	 * Start looking in the flex group where we last allocated an
+-	 * inode for this parent directory
+-	 */
+-	if (EXT4_I(parent)->i_last_alloc_group != ~0) {
+-		parent_group = EXT4_I(parent)->i_last_alloc_group;
+-		if (flex_size > 1)
+-			parent_group >>= sbi->s_log_groups_per_flex;
+-	}
+-
+-	for (i = 0; i < ngroups; i++) {
+-		grp = (parent_group + i) % ngroups;
+-		get_orlov_stats(sb, grp, flex_size, &stats);
+-		if (stats.used_dirs >= max_dirs)
+-			continue;
+-		if (stats.free_inodes < min_inodes)
+-			continue;
+-		if (stats.free_clusters < min_clusters)
+-			continue;
+-		goto found_flex_bg;
+-	}
+-
+-fallback:
+-	ngroups = real_ngroups;
+-	avefreei = freei / ngroups;
+-fallback_retry:
+-	parent_group = EXT4_I(parent)->i_block_group;
+-	for (i = 0; i < ngroups; i++) {
+-		grp = (parent_group + i) % ngroups;
+-		desc = ext4_get_group_desc(sb, grp, NULL);
+-		if (desc) {
+-			grp_free = ext4_free_inodes_count(sb, desc);
+-			if (grp_free && grp_free >= avefreei) {
+-				*group = grp;
+-				return 0;
+-			}
++			break;
+ 		}
+ 	}
+-
+-	if (avefreei) {
+-		/*
+-		 * The free-inodes counter is approximate, and for really small
+-		 * filesystems the above test can fail to find any blockgroups
+-		 */
+-		avefreei = 0;
+-		goto fallback_retry;
+-	}
+-
+-	return -1;
++	return ret;
+ }
+ 
+-static int find_group_other(struct super_block *sb, struct inode *parent,
+-			    ext4_group_t *group, umode_t mode)
++/* ADAM PDE: linear alloc for files */
++static int find_group_other_linear(struct super_block *sb, struct inode *parent,
++				ext4_group_t *best_group)
+ {
+-	ext4_group_t parent_group = EXT4_I(parent)->i_block_group;
+-	ext4_group_t i, last, ngroups = ext4_get_groups_count(sb);
+-	struct ext4_group_desc *desc;
+-	int flex_size = ext4_flex_bg_size(EXT4_SB(sb));
+-
+-	/*
+-	 * Try to place the inode is the same flex group as its
+-	 * parent.  If we can't find space, use the Orlov algorithm to
+-	 * find another flex group, and store that information in the
+-	 * parent directory's inode information so that use that flex
+-	 * group for future allocations.
+-	 */
+-	if (flex_size > 1) {
+-		int retry = 0;
+-
+-	try_again:
+-		parent_group &= ~(flex_size-1);
+-		last = parent_group + flex_size;
+-		if (last > ngroups)
+-			last = ngroups;
+-		for  (i = parent_group; i < last; i++) {
+-			desc = ext4_get_group_desc(sb, i, NULL);
+-			if (desc && ext4_free_inodes_count(sb, desc)) {
+-				*group = i;
+-				return 0;
++	ext4_group_t ngroups = ext4_get_groups_count(sb);
++	//unsigned int freei;
++	struct ext4_group_desc *desc = NULL;
++	ext4_group_t group;
++	int ret = -1;
++
++	for (group = 0; group < ngroups; group++) {
++		desc = ext4_get_group_desc(sb, group, NULL);
++		if (desc && ext4_free_inodes_count(sb, desc)) {
++		    if (ext4_free_group_clusters(sb, desc)) {
++		    //if (ext4_free_blks_count(sb, desc)) {
++			    *best_group = group;
++			    ret = 0;
++			    break;
+ 			}
+ 		}
+-		if (!retry && EXT4_I(parent)->i_last_alloc_group != ~0) {
+-			retry = 1;
+-			parent_group = EXT4_I(parent)->i_last_alloc_group;
+-			goto try_again;
+-		}
+-		/*
+-		 * If this didn't work, use the Orlov search algorithm
+-		 * to find a new flex group; we pass in the mode to
+-		 * avoid the topdir algorithms.
+-		 */
+-		*group = parent_group + flex_size;
+-		if (*group > ngroups)
+-			*group = 0;
+-		return find_group_orlov(sb, parent, group, mode, NULL);
+-	}
+-
+-	/*
+-	 * Try to place the inode in its parent directory
+-	 */
+-	*group = parent_group;
+-	desc = ext4_get_group_desc(sb, *group, NULL);
+-	if (desc && ext4_free_inodes_count(sb, desc) &&
+-	    ext4_free_group_clusters(sb, desc))
+-		return 0;
+-
+-	/*
+-	 * We're going to place this inode in a different blockgroup from its
+-	 * parent.  We want to cause files in a common directory to all land in
+-	 * the same blockgroup.  But we want files which are in a different
+-	 * directory which shares a blockgroup with our parent to land in a
+-	 * different blockgroup.
+-	 *
+-	 * So add our directory's i_ino into the starting point for the hash.
+-	 */
+-	*group = (*group + parent->i_ino) % ngroups;
+-
+-	/*
+-	 * Use a quadratic hash to find a group with a free inode and some free
+-	 * blocks.
+-	 */
+-	for (i = 1; i < ngroups; i <<= 1) {
+-		*group += i;
+-		if (*group >= ngroups)
+-			*group -= ngroups;
+-		desc = ext4_get_group_desc(sb, *group, NULL);
+-		if (desc && ext4_free_inodes_count(sb, desc) &&
+-		    ext4_free_group_clusters(sb, desc))
+-			return 0;
+ 	}
+-
+-	/*
+-	 * That failed: try linear search for a free inode, even if that group
+-	 * has no free blocks.
+-	 */
+-	*group = parent_group;
+-	for (i = 0; i < ngroups; i++) {
+-		if (++*group >= ngroups)
+-			*group = 0;
+-		desc = ext4_get_group_desc(sb, *group, NULL);
+-		if (desc && ext4_free_inodes_count(sb, desc))
+-			return 0;
+-	}
+-
+-	return -1;
++	return ret;
+ }
+ 
+ /*
+@@ -790,22 +533,12 @@ struct inode *__ext4_new_inode(handle_t *handle, struct inode *dir,
+ 	if (err)
+ 		goto out;
+ 
+-	if (!goal)
+-		goal = sbi->s_inode_goal;
+-
+-	if (goal && goal <= le32_to_cpu(sbi->s_es->s_inodes_count)) {
+-		group = (goal - 1) / EXT4_INODES_PER_GROUP(sb);
+-		ino = (goal - 1) % EXT4_INODES_PER_GROUP(sb);
+-		ret2 = 0;
+-		goto got_group;
+-	}
+-
++	/* ADAM PDE: linear alloc */
+ 	if (S_ISDIR(mode))
+-		ret2 = find_group_orlov(sb, dir, &group, mode, qstr);
++		ret2 = find_group_dir_linear(sb, dir, &group);
+ 	else
+-		ret2 = find_group_other(sb, dir, &group, mode);
++		ret2 = find_group_other_linear(sb, dir, &group);
+ 
+-got_group:
+ 	EXT4_I(dir)->i_last_alloc_group = group;
+ 	err = -ENOSPC;
+ 	if (ret2 == -1)
+diff --git a/fs/ext4/super.c b/fs/ext4/super.c
+index b2f9fb027d16..29fa805e4df5 100644
+--- a/fs/ext4/super.c
++++ b/fs/ext4/super.c
+@@ -52,13 +52,15 @@
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/ext4.h>
++#define ENFROCE_NO_JOURNAL
+ 
+ static struct ext4_lazy_init *ext4_li_info;
+ static struct mutex ext4_li_mtx;
+ static struct ratelimit_state ext4_mount_msg_ratelimit;
+-
++#ifndef ENFROCE_NO_JOURNAL
+ static int ext4_load_journal(struct super_block *, struct ext4_super_block *,
+ 			     unsigned long journal_devnum);
++#endif
+ static int ext4_show_options(struct seq_file *seq, struct dentry *root);
+ static int ext4_commit_super(struct super_block *sb, int sync);
+ static void ext4_mark_recovery_complete(struct super_block *sb,
+@@ -81,7 +83,6 @@ static void ext4_unregister_li_request(struct super_block *sb);
+ static void ext4_clear_request_list(void);
+ static struct inode *ext4_get_journal_inode(struct super_block *sb,
+ 					    unsigned int journal_inum);
+-
+ /*
+  * Lock ordering
+  *
+@@ -766,6 +767,7 @@ void ext4_update_dynamic_rev(struct super_block *sb)
+ /*
+  * Open the external journal device
+  */
++#ifndef ENFROCE_NO_JOURNAL
+ static struct block_device *ext4_blkdev_get(dev_t dev, struct super_block *sb)
+ {
+ 	struct block_device *bdev;
+@@ -781,7 +783,7 @@ static struct block_device *ext4_blkdev_get(dev_t dev, struct super_block *sb)
+ 			__bdevname(dev, b), PTR_ERR(bdev));
+ 	return NULL;
+ }
+-
++#endif
+ /*
+  * Release the journal device
+  */
+@@ -3516,17 +3518,20 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
+ #ifdef CONFIG_EXT4_FS_POSIX_ACL
+ 	set_opt(sb, POSIX_ACL);
+ #endif
++
++#ifndef ENFORCE_NO_JOURNAL
+ 	/* don't forget to enable journal_csum when metadata_csum is enabled. */
+ 	if (ext4_has_metadata_csum(sb))
+ 		set_opt(sb, JOURNAL_CHECKSUM);
+-
+-	if ((def_mount_opts & EXT4_DEFM_JMODE) == EXT4_DEFM_JMODE_DATA)
++    if ((def_mount_opts & EXT4_DEFM_JMODE) == EXT4_DEFM_JMODE_DATA)
+ 		set_opt(sb, JOURNAL_DATA);
+ 	else if ((def_mount_opts & EXT4_DEFM_JMODE) == EXT4_DEFM_JMODE_ORDERED)
+ 		set_opt(sb, ORDERED_DATA);
+ 	else if ((def_mount_opts & EXT4_DEFM_JMODE) == EXT4_DEFM_JMODE_WBACK)
+ 		set_opt(sb, WRITEBACK_DATA);
+-
++#else
++    set_opt(sb, ORDERED_DATA);
++#endif
+ 	if (le16_to_cpu(sbi->s_es->s_errors) == EXT4_ERRORS_PANIC)
+ 		set_opt(sb, ERRORS_PANIC);
+ 	else if (le16_to_cpu(sbi->s_es->s_errors) == EXT4_ERRORS_CONTINUE)
+@@ -4015,6 +4020,7 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
+ 	 * The first inode we look at is the journal inode.  Don't try
+ 	 * root first: it may be modified in the journal!
+ 	 */
++#ifndef ENFROCE_NO_JOURNAL
+ 	if (!test_opt(sb, NOLOAD) && ext4_has_feature_journal(sb)) {
+ 		err = ext4_load_journal(sb, es, journal_devnum);
+ 		if (err)
+@@ -4055,7 +4061,15 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
+ 		needs_recovery = 0;
+ 		goto no_journal;
+ 	}
+-
++#else
++    printk(KERN_ERR "ENFORCE_NO_JOURNAL\n");
++    clear_opt(sb, JOURNAL_CHECKSUM);
++    //clear_opt(sb, DATA_FLAGS);
++    set_opt(sb, ORDERED_DATA);
++    sbi->s_journal = NULL;
++    needs_recovery = 0;
++    goto no_journal;
++#endif
+ 	if (ext4_has_feature_64bit(sb) &&
+ 	    !jbd2_journal_set_features(EXT4_SB(sb)->s_journal, 0, 0,
+ 				       JBD2_FEATURE_INCOMPAT_64BIT)) {
+@@ -4076,12 +4090,16 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
+ 		/* No mode set, assume a default based on the journal
+ 		 * capabilities: ORDERED_DATA if the journal can
+ 		 * cope, else JOURNAL_DATA
+-		 */
++         */
++        printk(KERN_ERR, "0 opt for DATA FLAGS. Enforce ordered data\n");
++        set_opt(sb, ORDERED_DATA);
++#if 0
+ 		if (jbd2_journal_check_available_features
+ 		    (sbi->s_journal, 0, 0, JBD2_FEATURE_INCOMPAT_REVOKE))
+ 			set_opt(sb, ORDERED_DATA);
+-		else
+-			set_opt(sb, JOURNAL_DATA);
++        else
++            set_opt(sb, JOURNAL_DATA);
++#endif
+ 		break;
+ 
+ 	case EXT4_MOUNT_ORDERED_DATA:
+@@ -4288,12 +4306,17 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
+ 				 "the device does not support discard");
+ 	}
+ 
+-	if (___ratelimit(&ext4_mount_msg_ratelimit, "EXT4-fs mount"))
+-		ext4_msg(sb, KERN_INFO, "mounted filesystem with%s. "
++    //if (___ratelimit(&ext4_mount_msg_ratelimit, "EXT4-fs mount"))
++        /*ext4_msg(sb, KERN_INFO, "mounted filesystem with%s. "
+ 			 "Opts: %.*s%s%s", descr,
+ 			 (int) sizeof(sbi->s_es->s_mount_opts),
+ 			 sbi->s_es->s_mount_opts,
+-			 *sbi->s_es->s_mount_opts ? "; " : "", orig_data);
++             *sbi->s_es->s_mount_opts ? "; " : "", orig_data);*/
++        printk(KERN_ERR, "mounted filesystem with%s. "
++               "Opts: %.*s%s%s", descr,
++               (int) sizeof(sbi->s_es->s_mount_opts),
++               sbi->s_es->s_mount_opts,
++               *sbi->s_es->s_mount_opts ? "; " : "", orig_data);
+ 
+ 	if (es->s_error_count)
+ 		mod_timer(&sbi->s_err_report, jiffies + 300*HZ); /* 5 minutes */
+@@ -4429,7 +4452,7 @@ static struct inode *ext4_get_journal_inode(struct super_block *sb,
+ 	}
+ 	return journal_inode;
+ }
+-
++#ifndef ENFROCE_NO_JOURNAL
+ static journal_t *ext4_get_journal(struct super_block *sb,
+ 				   unsigned int journal_inum)
+ {
+@@ -4639,7 +4662,7 @@ static int ext4_load_journal(struct super_block *sb,
+ 
+ 	return 0;
+ }
+-
++#endif
+ static int ext4_commit_super(struct super_block *sb, int sync)
+ {
+ 	struct ext4_super_block *es = EXT4_SB(sb)->s_es;

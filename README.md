@@ -1,6 +1,5 @@
 New features:
-Ported to android kitkat
-Add new feature with third password. When used enter third password hidden volume wipes and system starts with empty hidden volume
+Implemented to android 10
 
 NOTICE:
 
